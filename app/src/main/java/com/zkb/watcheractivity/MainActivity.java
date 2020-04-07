@@ -4,31 +4,50 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Debug;
+import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.view.View;
+import android.widget.Toast;
 
+import com.karumi.dexter.Dexter;
+import com.karumi.dexter.MultiplePermissionsReport;
+import com.karumi.dexter.PermissionToken;
+import com.karumi.dexter.listener.PermissionRequest;
+import com.karumi.dexter.listener.multi.MultiplePermissionsListener;
 import com.squareup.leakcanary.LeakCanary;
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.ref.ReferenceQueue;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArraySet;
 
+import static com.squareup.leakcanary.HeapDumper.RETRY_LATER;
+import static com.squareup.leakcanary.Retryable.Result.RETRY;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "watchActivity1";
+    static final String[] PERMISSIONS = new String[]{
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            Manifest.permission.READ_EXTERNAL_STORAGE,
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-       // LeakCanary.refWatcher(getApplication()).watchFragments(false).buildAndInstall();
+        requestAppPermissions();
+        // LeakCanary.refWatcher(getApplication()).watchFragments(false).buildAndInstall();
         initRegisterActivityLifecycleCallbacks();
 
         findViewById(R.id.button).setOnClickListener(new View.OnClickListener() {
@@ -54,7 +73,7 @@ public class MainActivity extends AppCompatActivity {
         MyWeakReference ref;
         if ((ref = (MyWeakReference) queue.poll()) != null) {
             retainedKeys.remove(ref.key);
-            Log.d(TAG, "---------------recycle activity----------"+ref.name);
+            Log.d(TAG, "---------------recycle activity----------" + ref.name);
         }
 
     }
@@ -71,10 +90,37 @@ public class MainActivity extends AppCompatActivity {
         removeKey();
 
 
-        if(retainedKeys.contains(weakReference.key)){
+        if (retainedKeys.contains(weakReference.key)) {
             //activity 泄漏
-            Log.d(TAG, "-----activity leak----"+weakReference.name );
+            Log.d(TAG, "-----activity leak----" + weakReference.name);
             Log.d(TAG, "MyWeakReference Activity:    --" + weakReference.get());
+            File storageDirectory = new File(Environment.getExternalStorageDirectory().getPath()+"/watchActivity");
+
+            if(!storageDirectory.exists()){
+                storageDirectory.mkdir();
+            }
+
+            File heapDumpFile = new File(storageDirectory, UUID.randomUUID().toString() + ".hprof");
+
+            if (heapDumpFile == null) return;
+            try {
+                Log.d(TAG, "---dumpHprofData -------" + heapDumpFile.getAbsolutePath());
+                Debug.dumpHprofData(heapDumpFile.getAbsolutePath());
+
+                if (storageDirectory.list() != null) {
+
+                    for (String name : storageDirectory.list()) {
+                        Log.d(TAG, "name :" + name);
+                    }
+
+                }
+
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+
         }
 
         Log.d(TAG, "Activity size:" + ActivityMap.get().getSize());
@@ -117,7 +163,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onActivityDestroyed(@NonNull Activity activity) {
 
-                Log.d(TAG, "Destroyed Activity:"+activity.getClass().getName());
+                Log.d(TAG, "Destroyed Activity:" + activity.getClass().getName());
 
                 String key = UUID.randomUUID().toString();
 
@@ -128,8 +174,7 @@ public class MainActivity extends AppCompatActivity {
 
                 //Log.d(TAG, "MyWeakReference Activity1:    --" + weakReference.get());
                 //五秒后去观察，让 gc 飞一会
-                new Handler().postDelayed(() -> watchActivity(weakReference),5000);
-
+                new Handler().postDelayed(() -> watchActivity(weakReference), 5000);
 
 
             }
@@ -144,4 +189,26 @@ public class MainActivity extends AppCompatActivity {
             throw new AssertionError();
         }
     }
+
+    private void requestAppPermissions() {
+        Dexter.withActivity(this)
+                .withPermissions(PERMISSIONS)
+                .withListener(new MultiplePermissionsListener() {
+                    @Override
+                    public void onPermissionsChecked(MultiplePermissionsReport report) {
+                        if (report.areAllPermissionsGranted()) {
+                            //  initView();
+                            Toast.makeText(getApplicationContext(), "权限获取成功", Toast.LENGTH_LONG).show();
+                        } else {
+                            Toast.makeText(getApplicationContext(), "权限获取失败", Toast.LENGTH_LONG).show();
+                        }
+                    }
+
+                    @Override
+                    public void onPermissionRationaleShouldBeShown(List<PermissionRequest> permissions, PermissionToken token) {
+                    }
+                })
+                .check();
+    }
+
 }
