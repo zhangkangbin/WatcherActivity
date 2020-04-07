@@ -52,22 +52,15 @@ public class MainActivity extends AppCompatActivity {
 
     private void removeKey() {
         MyWeakReference ref;
-        while ((ref = (MyWeakReference) queue.poll()) != null) {
+        if ((ref = (MyWeakReference) queue.poll()) != null) {
             retainedKeys.remove(ref.key);
             Log.d(TAG, "---------------recycle activity----------"+ref.name);
         }
-
-    /*    while (queue.poll()!=null){
-            Log.d(TAG, "---------------remove2-----------------"+queue.poll());
-        }*/
 
     }
 
     private void watchActivity(MyWeakReference weakReference) {
 
-      /*  Runtime.getRuntime().gc();
-        enqueueReferences();
-        System.runFinalization();*/
 
         removeKey();
 
@@ -136,7 +129,6 @@ public class MainActivity extends AppCompatActivity {
                 //Log.d(TAG, "MyWeakReference Activity1:    --" + weakReference.get());
                 //五秒后去观察，让 gc 飞一会
                 new Handler().postDelayed(() -> watchActivity(weakReference),5000);
-
 
 
 
