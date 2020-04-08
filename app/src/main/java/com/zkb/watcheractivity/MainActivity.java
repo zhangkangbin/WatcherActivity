@@ -21,18 +21,30 @@ import com.karumi.dexter.MultiplePermissionsReport;
 import com.karumi.dexter.PermissionToken;
 import com.karumi.dexter.listener.PermissionRequest;
 import com.karumi.dexter.listener.multi.MultiplePermissionsListener;
-import com.squareup.leakcanary.LeakCanary;
+import com.squareup.haha.perflib.ArrayInstance;
+import com.squareup.haha.perflib.ClassInstance;
+import com.squareup.haha.perflib.ClassObj;
+import com.squareup.haha.perflib.HprofParser;
+import com.squareup.haha.perflib.Instance;
+import com.squareup.haha.perflib.Snapshot;
+import com.squareup.haha.perflib.Type;
+import com.squareup.haha.perflib.io.MemoryMappedFileBuffer;
+
+
+
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.ref.ReferenceQueue;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.Charset;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArraySet;
 
-import static com.squareup.leakcanary.HeapDumper.RETRY_LATER;
-import static com.squareup.leakcanary.Retryable.Result.RETRY;
+
 
 public class MainActivity extends AppCompatActivity {
 
@@ -94,9 +106,9 @@ public class MainActivity extends AppCompatActivity {
             //activity 泄漏
             Log.d(TAG, "-----activity leak----" + weakReference.name);
             Log.d(TAG, "MyWeakReference Activity:    --" + weakReference.get());
-            File storageDirectory = new File(Environment.getExternalStorageDirectory().getPath()+"/watchActivity");
+            File storageDirectory = new File(Environment.getExternalStorageDirectory().getPath() + "/watchActivity");
 
-            if(!storageDirectory.exists()){
+            if (!storageDirectory.exists()) {
                 storageDirectory.mkdir();
             }
 
@@ -107,13 +119,38 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "---dumpHprofData -------" + heapDumpFile.getAbsolutePath());
                 Debug.dumpHprofData(heapDumpFile.getAbsolutePath());
 
-                if (storageDirectory.list() != null) {
 
+                Debug.dumpHprofData(heapDumpFile.getAbsolutePath());
+                //   After dumping the heap, use HAHA to parse and analyze it.
+
+                MemoryMappedFileBuffer buffer = new MemoryMappedFileBuffer(heapDumpFile);
+                HprofParser parser = new HprofParser(buffer);
+                Snapshot snapshot = parser.parse();
+                ClassObj classObj = snapshot.findClass(MyWeakReference.class.getName());
+
+
+                for (Instance instance : classObj.getInstancesList()) {
+                    ClassInstance classInstance = (ClassInstance) instance;
+                    List<ClassInstance.FieldValue> fieldValues = classInstance.getValues();
+                    for (ClassInstance.FieldValue fieldValue : fieldValues) {
+
+                        if (fieldValue.getField().getName().equals("key")) {
+                            Log.d(TAG, "key :" + asString(fieldValue.getValue()));
+                        }
+                        if (fieldValue.getField().getName().equals("name")) {
+                            Log.d(TAG, "name :" + asString(fieldValue.getValue()));
+                        }
+                    }
+
+                }
+
+
+      /*          if (storageDirectory.list() != null) {
                     for (String name : storageDirectory.list()) {
                         Log.d(TAG, "name :" + name);
                     }
 
-                }
+                }*/
 
 
             } catch (IOException e) {
@@ -125,6 +162,90 @@ public class MainActivity extends AppCompatActivity {
 
         Log.d(TAG, "Activity size:" + ActivityMap.get().getSize());
         Log.d(TAG, "retainedKeys size:" + retainedKeys.size());
+    }
+
+    static <T> T fieldValue(List<ClassInstance.FieldValue> values, String fieldName) {
+        for (ClassInstance.FieldValue fieldValue : values) {
+            if (fieldValue.getField().getName().equals(fieldName)) {
+                return (T) fieldValue.getValue();
+            }
+        }
+        throw new IllegalArgumentException("Field " + fieldName + " does not exists");
+    }
+
+    static List<ClassInstance.FieldValue> classInstanceValues(Instance instance) {
+        ClassInstance classInstance = (ClassInstance) instance;
+        return classInstance.getValues();
+    }
+    private static boolean isByteArray(Object value) {
+        return value instanceof ArrayInstance && ((ArrayInstance) value).getArrayType() == Type.BYTE;
+    }
+    private String asString(Object stringObject) {
+
+
+        Instance instance = (Instance) stringObject;
+        List<ClassInstance.FieldValue> values = classInstanceValues(instance);
+
+        Integer count = fieldValue(values, "count");
+
+        if (count == 0) {
+            return "";
+        }
+
+        Object value = fieldValue(values, "value");
+
+        Integer offset;
+        ArrayInstance array;
+        if (isCharArray(value)) {
+            array = (ArrayInstance) value;
+
+            offset = 0;
+            // < API 23
+            // As of Marshmallow, substrings no longer share their parent strings' char arrays
+            // eliminating the need for String.offset
+            // https://android-review.googlesource.com/#/c/83611/
+            if (hasField(values, "offset")) {
+                offset = fieldValue(values, "offset");
+
+            }
+
+            char[] chars = array.asCharArray(offset, count);
+            return new String(chars);
+        }else if (isByteArray(value)) {
+            // In API 26, Strings are now internally represented as byte arrays.
+            array = (ArrayInstance) value;
+
+            // HACK - remove when HAHA's perflib is updated to https://goo.gl/Oe7ZwO.
+            try {
+                Method asRawByteArray =
+                        ArrayInstance.class.getDeclaredMethod("asRawByteArray", int.class, int.class);
+                asRawByteArray.setAccessible(true);
+                byte[] rawByteArray = (byte[]) asRawByteArray.invoke(array, 0, count);
+                return new String(rawByteArray, Charset.forName("UTF-8"));
+            } catch (NoSuchMethodException e) {
+                throw new RuntimeException(e);
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+            } catch (InvocationTargetException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return stringObject.toString();
+    }
+
+    static boolean hasField(List<ClassInstance.FieldValue> values, String fieldName) {
+        for (ClassInstance.FieldValue fieldValue : values) {
+            if (fieldValue.getField().getName().equals(fieldName)) {
+                //noinspection unchecked
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    private static boolean isCharArray(Object value) {
+        return value instanceof ArrayInstance && ((ArrayInstance) value).getArrayType() == Type.CHAR;
     }
 
     private void initRegisterActivityLifecycleCallbacks() {
